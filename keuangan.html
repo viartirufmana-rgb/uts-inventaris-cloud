@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Catatan Keuangan Mahasiswa</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script>window.supabase || document.write('<script src="https://unpkg.com/@supabase/supabase-js@2"><\/script>')</script>
+<style>
+  :root { --hijau:#16a34a; --merah:#dc2626; --biru:#2563eb; --abu:#f3f4f6; --teks:#111827; }
+  * { box-sizing: border-box; }
+  body { font-family: system-ui, sans-serif; background: var(--abu); color: var(--teks); margin: 0; padding: 16px; }
+  .wrap { max-width: 560px; margin: 0 auto; }
+  h1 { font-size: 1.4rem; margin: 0 0 4px; }
+  .sub { color: #6b7280; font-size: .9rem; margin-bottom: 16px; }
+  .card { background: #fff; border-radius: 12px; padding: 16px; margin-bottom: 16px; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+  .saldo { text-align: center; }
+  .saldo .label { color: #6b7280; font-size: .85rem; }
+  .saldo .angka { font-size: 2rem; font-weight: 700; }
+  .ringkas { display: flex; gap: 12px; margin-top: 12px; }
+  .ringkas div { flex: 1; border-radius: 8px; padding: 8px; text-align: center; font-size: .85rem; }
+  .in { background: #dcfce7; color: var(--hijau); }
+  .out { background: #fee2e2; color: var(--merah); }
+  form { display: grid; gap: 10px; }
+  input, select, button { font: inherit; padding: 10px; border: 1px solid #d1d5db; border-radius: 8px; width: 100%; }
+  button { background: var(--biru); color: #fff; border: 0; cursor: pointer; font-weight: 600; }
+  button:disabled { opacity: .6; }
+  .item { display: flex; justify-content: space-between; align-items: center; padding: 10px 0; border-bottom: 1px solid #eee; gap: 8px; }
+  .item:last-child { border-bottom: 0; }
+  .item .ket { font-weight: 600; }
+  .item .meta { font-size: .8rem; color: #6b7280; }
+  .plus { color: var(--hijau); font-weight: 600; }
+  .minus { color: var(--merah); font-weight: 600; }
+  .hapus { width: auto; background: none; color: var(--merah); border: 1px solid var(--merah); padding: 4px 8px; font-size: .8rem; }
+  .kosong { text-align: center; color: #9ca3af; padding: 16px 0; }
+  .banner { background: #fef3c7; color: #92400e; padding: 8px 12px; border-radius: 8px; font-size: .85rem; margin-bottom: 16px; }
+  #pesan { color: var(--merah); font-size: .85rem; min-height: 1em; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>💰 Catatan Keuangan</h1>
+  <div class="sub">Catat pemasukan dan pengeluaranmu dengan mudah.</div>
+  <div id="banner" class="banner" style="display:none">Mode demo: data disimpan di browser. Isi SUPABASE_URL dan SUPABASE_KEY agar tersimpan di cloud.</div>
+
+  <div class="card saldo">
+    <div class="label">Saldo Saat Ini</div>
+    <div class="angka" id="saldo">Rp 0</div>
+    <div class="ringkas">
+      <div class="in">Pemasukan<br><b id="totalMasuk">Rp 0</b></div>
+      <div class="out">Pengeluaran<br><b id="totalKeluar">Rp 0</b></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <form id="form">
+      <select id="jenis">
+        <option value="masuk">Pemasukan</option>
+        <option value="keluar">Pengeluaran</option>
+      </select>
+      <input id="keterangan" placeholder="Keterangan (cth: Uang saku, Makan siang)" required maxlength="80">
+      <input id="nominal" type="number" min="1" placeholder="Nominal (Rp)" required>
+      <button id="tombol" type="submit">Tambah Transaksi</button>
+      <div id="pesan"></div>
+    </form>
+  </div>
+
+  <div class="card">
+    <b>Riwayat Transaksi</b>
+    <div id="daftar"></div>
+  </div>
+</div>
+
+<script>
+  // ====== KONFIGURASI SUPABASE (isi dengan milikmu) ======
+  const SUPABASE_URL = "https://kntbkuqzqfdkfyxdasfz.supabase.co";
+  const SUPABASE_KEY = "sb_publishable__jTMeOjxlkmMlW3myaXPPA_xzwEq9IX";
+  // =======================================================
+
+  const demo = SUPABASE_URL.startsWith("ISI_");
+  const db = demo ? null : supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+  // ID unik per perangkat, supaya data tiap pengguna terpisah
+  let deviceId = localStorage.getItem("device_id");
+  if (!deviceId) {
+    deviceId = crypto.randomUUID();
+    localStorage.setItem("device_id", deviceId);
+  }
+
+  const rupiah = n => "Rp " + Number(n).toLocaleString("id-ID");
+  const $ = id => document.getElementById(id);
+  if (demo) $("banner").style.display = "block";
+
+  // ---------- Akses data ----------
+  async function ambilData() {
+    if (demo) return JSON.parse(localStorage.getItem("demo_data") || "[]");
+    const { data, error } = await db.from("transaksi").select("*")
+      .eq("device_id", deviceId).order("created_at", { ascending: false });
+    if (error) throw error;
+    return data;
+  }
+
+  async function simpanData(item) {
+    if (demo) {
+      const list = JSON.parse(localStorage.getItem("demo_data") || "[]");
+      list.unshift({ ...item, id: Date.now(), created_at: new Date().toISOString() });
+      localStorage.setItem("demo_data", JSON.stringify(list));
+      return;
+    }
+    const { error } = await db.from("transaksi").insert({ ...item, device_id: deviceId });
+    if (error) throw error;
+  }
+
+  async function hapusData(id) {
+    if (demo) {
+      const list = JSON.parse(localStorage.getItem("demo_data") || "[]").filter(x => x.id !== id);
+      localStorage.setItem("demo_data", JSON.stringify(list));
+      return;
+    }
+    const { error } = await db.from("transaksi").delete().eq("id", id).eq("device_id", deviceId);
+    if (error) throw error;
+  }
+
+  // ---------- Tampilan ----------
+  async function tampilkan() {
+    try {
+      const data = await ambilData();
+      let masuk = 0, keluar = 0;
+      data.forEach(t => t.jenis === "masuk" ? masuk += t.nominal : keluar += t.nominal);
+      $("totalMasuk").textContent = rupiah(masuk);
+      $("totalKeluar").textContent = rupiah(keluar);
+      $("saldo").textContent = rupiah(masuk - keluar);
+
+      const el = $("daftar");
+      if (!data.length) { el.innerHTML = '<div class="kosong">Belum ada transaksi</div>'; return; }
+      el.innerHTML = "";
+      data.forEach(t => {
+        const row = document.createElement("div");
+        row.className = "item";
+        const kiri = document.createElement("div");
+        const ket = document.createElement("div");
+        ket.className = "ket"; ket.textContent = t.keterangan;
+        const meta = document.createElement("div");
+        meta.className = "meta";
+        meta.textContent = new Date(t.created_at).toLocaleString("id-ID", { dateStyle: "medium", timeStyle: "short" });
+        kiri.append(ket, meta);
+        const nom = document.createElement("div");
+        nom.className = t.jenis === "masuk" ? "plus" : "minus";
+        nom.textContent = (t.jenis === "masuk" ? "+" : "-") + rupiah(t.nominal);
+        const btn = document.createElement("button");
+        btn.className = "hapus"; btn.textContent = "Hapus";
+        btn.onclick = async () => { await hapusData(t.id); tampilkan(); };
+        row.append(kiri, nom, btn);
+        el.appendChild(row);
+      });
+    } catch (e) {
+      $("pesan").textContent = "Gagal memuat data: " + e.message;
+    }
+  }
+
+  $("form").addEventListener("submit", async e => {
+    e.preventDefault();
+    $("pesan").textContent = "";
+    $("tombol").disabled = true;
+    try {
+      await simpanData({
+        jenis: $("jenis").value,
+        keterangan: $("keterangan").value.trim(),
+        nominal: parseInt($("nominal").value, 10)
+      });
+      $("form").reset();
+      await tampilkan();
+    } catch (err) {
+      $("pesan").textContent = "Gagal menyimpan: " + err.message;
+    }
+    $("tombol").disabled = false;
+  });
+
+  tampilkan();
+</script>
+</body>
+</html>
